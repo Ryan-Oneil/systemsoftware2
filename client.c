@@ -6,13 +6,28 @@
 #include <unistd.h>
 #include "constants.h"
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <errno.h>
+
+void readInputFromSocket(int networkSocket);
 
 long getFileSize(const char *fileName) {
     struct stat st;
     stat(fileName, &st);
 
     return st.st_size;
+}
+
+//This function waits for the server to acknowledge the data we sent before sending more
+void sendInputToServer(int socket, void *message) {
+    char serverMessage[100];
+    send(socket, message, sizeof(message), 0);
+
+    if (recv(socket, serverMessage, 100, 0) < 0) {
+        printf("\nIO error: %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+    printf("\nStatus: %s\n", serverMessage);
 }
 
 void uploadFile(int socket, const char *fileName) {
@@ -36,7 +51,7 @@ void uploadFile(int socket, const char *fileName) {
     printf("\nSending filesize of %s\n", fileSize);
 
     //Sends server the fileSize to determine the end of file
-    send(socket, fileSize, sizeof(fileSize), 0);
+    sendInputToServer(socket, fileSize);
 
     int fs_block_sz;
 
@@ -70,24 +85,36 @@ int main() {
         printf("\nError connecting to server");
         exit(EXIT_FAILURE);
     }
-
     printf("Connection established\n");
-    char message[500];
-    char serverMessage[500];
+    char message[LENGTH];
+    char uid[30];
+    char gid[30];
+
+    sprintf(uid, "%d", geteuid());
+    sprintf(gid, "%d", getegid());
+
+    sendInputToServer(networkSocket, uid);
+    sendInputToServer(networkSocket, gid);
 
     printf("\nEnter fileName: ");
-    scanf("%s", message);
+    scanf("%512s", message);
 
-    send(networkSocket, message, strlen(message), 0);
+    sendInputToServer(networkSocket, message);
     uploadFile(networkSocket, message);
 
-    if (recv(networkSocket, serverMessage, strlen(serverMessage), 0) < 0) {
-        printf("\nIO error: %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
-    printf("\nMessage received %s\n", serverMessage);
+    readInputFromSocket(networkSocket);
 
     close(networkSocket);
 
     return 0;
+}
+
+void readInputFromSocket(int networkSocket) {
+    char serverMessage[LENGTH];
+
+    if (recv(networkSocket, serverMessage, LENGTH, 0) < 0) {
+        printf("\nIO error: %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+    printf("\nStatus: %s\n", serverMessage);
 }

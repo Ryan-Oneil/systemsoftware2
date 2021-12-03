@@ -4,5 +4,6 @@
 #define PORT 3874
 #define IP "127.0.0.1"
 #define LENGTH 512
+#define OK_MESSAGE "OK"
 
 #endif //SYSTEMSOFTWARE2_CONSTANTS_H

@@ -6,23 +6,52 @@
 #include <unistd.h>
 #include "constants.h"
 #include <errno.h>
+#include <pthread.h>
+#include <sys/fsuid.h>
+
+void checkSocketInput(int status) {
+    if(status < 0) {
+        if (errno == EAGAIN) {
+            fflush(stdout);
+            printf("\nClient timed out.\n");
+        } else {
+            fprintf(stderr, "Client failed due to errno = %d\n", errno);
+            pthread_exit(NULL);
+        }
+    }
+}
+
+//This function prevents input from client getting sent with other input
+//Without this the client could end up sending all the data at once causing confusion on server end
+void getInputFromSocket(int socket, char *buffer) {
+    long readSize = recv(socket, buffer, sizeof(buffer), 0);
+    checkSocketInput(readSize);
+
+    printf("\nReceived %s from client\n", buffer);
+
+    //Sends acknowledgement to client
+    write(socket, OK_MESSAGE, strlen(OK_MESSAGE));
+}
 
 char* downloadFile (int socket, char *fileName) {
     char* fr_path = "serverfiles/";
     char revbuf[LENGTH];
     char *fr_name = (char *) malloc(1 + strlen(fr_path)+ strlen(fileName));
     sprintf(fr_name, "%s%s", fr_path, fileName);
+
     FILE *fr = fopen(fr_name, "w");
 
     if(fr == NULL) {
         printf("File %s Cannot be opened file on server.\n", fr_name);
+        free(fr_name);
 
         return "File failed to transfer";
     }
-    memset(revbuf, 0, LENGTH);
     int fr_block_sz = 0;
     long fileSize = 0;
-    recv(socket, revbuf, sizeof(revbuf), 0);
+
+    //Gets file size from client
+    getInputFromSocket(socket, revbuf);
     fileSize = atoi(revbuf);
 
     printf("\nThe size of the file is %ld\n", fileSize);
@@ -36,73 +65,77 @@ char* downloadFile (int socket, char *fileName) {
         memset(revbuf, 0, LENGTH);
         fileSize -= fr_block_sz;
     }
-    if(fr_block_sz < 0) {
-        if (errno == EAGAIN)
-            printf("recv() timed out.\n");
-        else {
-            fprintf(stderr, "recv() failed due to errno = %d\n", errno);
-            exit(EXIT_FAILURE);
-        }
-    }
+    checkSocketInput(fr_block_sz);
+
     printf("Received the whole file size\n");
     fclose(fr);
     free(fr_name);
 
-    return "";
+    return "File has successfully uploaded";
+}
+
+void* handleNewClient(void *socketNum) {
+    int socket = *((int *) socketNum);
+    char message[LENGTH] = "";
+    char uid[20] = "";
+    char gid[20] = "";
+
+    getInputFromSocket(socket, uid);
+    getInputFromSocket(socket, gid);
+
+    printf("User UID: %d, GID: %d", atoi(uid), atoi(gid));
+    setfsgid(atoi(gid));
+    setfsuid(atoi(uid));
+
+    getInputFromSocket(socket, message);
+
+    printf("\nClient sent %s\n", message);
+
+    char* result = downloadFile(socket, message);
+    write(socket, result, strlen(result));
+
+    free(socketNum);
+    printf("\nTransfer complete, client disconnecting\n");
 }
 
 int main() {
-    char* message;
-    long readSize;
-    int serverSocket, newSocket;
-    struct sockaddr_in serverAddr;
-    struct sockaddr_storage serverStorage;
+    struct sockaddr_in server, client;
+    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
-    socklen_t addr_size;
+    if (serverSocket == -1) {
+        perror("Failed to create socket");
+        exit(EXIT_FAILURE);
+    }
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
 
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(PORT);
-
-    if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        printf("Unable to bind to port");
+    if (bind(serverSocket, (struct sockaddr*)&server, sizeof(server)) < 0) {
+        printf("Unable to bind to port\n");
         exit(EXIT_FAILURE);
     } else {
         printf("Bound to port %d\n", PORT);
     }
 
     if (listen(serverSocket, 3) != 0) {
-        printf("Error\n");
+        printf("Error listening to connections\n");
     }
 
     while (1) {
-        printf("Waiting for a connection\n");
-        addr_size = sizeof(serverStorage);
+        pthread_t tid;
+        printf("\nWaiting for a connection\n");
+        int connSize = sizeof(struct sockaddr_in);
+        int *newSocket = malloc(sizeof(*newSocket));
 
-        newSocket = accept(serverSocket, (struct sockaddr*)&serverStorage, &addr_size);
+        *newSocket = accept(serverSocket, (struct sockaddr*)&client, (socklen_t*)&connSize);
 
-        if (newSocket < 0 ) {
-            perror("Couldn't establish connection");
-            exit(EXIT_FAILURE);
+        if (*newSocket < 0 ) {
+            perror("\nCouldn't establish connection\n");
+            continue;
         } else {
             printf("Accepted connection from client\n");
         }
-
-        memset(message, 0, 500);
-        readSize = recv(newSocket, message, sizeof(message), 0);
-        printf("\nClient sent %s\n", message);
-        downloadFile(newSocket, message);
-
-        printf("\nLetting the client know the file was uploaded\n");
-        write(newSocket, "File has been uploaded", strlen("File has been uploaded"));
-
-        if (readSize == 0) {
-            printf("Client disconnected\n");
-            fflush(stdout);
-        } else if (readSize == -1) {
-            perror("recv failed");
-        }
+        pthread_create(&tid, NULL, handleNewClient, (void *) newSocket);
     }
     return 0;
 }
