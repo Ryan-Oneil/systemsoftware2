@@ -48,10 +48,10 @@ char* downloadFile (int socket, char *fileName, const char *directory) {
     FILE *fr = fopen(fr_name, "w");
 
     if(fr == NULL) {
-        printf("File %s Cannot be opened file on server.\n", fr_name);
+        printf("File %s Cannot be opened file on server. %s\n", fr_name, strerror(errno));
         free(fr_name);
 
-        return "File failed to transfer";
+        return strerror(errno);
     }
     int fr_block_sz = 0;
     long fileSize = 0;
@@ -73,7 +73,7 @@ char* downloadFile (int socket, char *fileName, const char *directory) {
     }
     checkSocketInput(fr_block_sz);
 
-    printf("Received the whole file size\n");
+    printf("File transfer complete\n");
     fclose(fr);
     free(fr_name);
 
@@ -95,7 +95,7 @@ void* handleNewClient(void *socketNum) {
     write(socket, result, strlen(result));
 
     free(socketNum);
-    printf("\nTransfer complete, client disconnecting\n");
+    printf("\nClient disconnecting\n");
 }
 
 int main() {
