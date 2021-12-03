@@ -8,6 +8,11 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/fsuid.h>
+#include <dirent.h>
+
+int createServerSocket();
+void verifyDirectory(const char *dir, int socket);
+void setupUserCredentials(int socket);
 
 void checkSocketInput(int status) {
     if(status < 0) {
@@ -23,21 +28,22 @@ void checkSocketInput(int status) {
 
 //This function prevents input from client getting sent with other input
 //Without this the client could end up sending all the data at once causing confusion on server end
-void getInputFromSocket(int socket, char *buffer) {
-    long readSize = recv(socket, buffer, sizeof(buffer), 0);
+void getInputFromSocket(int socket, char *buffer, int bufferSize) {
+    long readSize = recv(socket, buffer, bufferSize, 0);
     checkSocketInput(readSize);
 
     printf("\nReceived %s from client\n", buffer);
 
     //Sends acknowledgement to client
-    write(socket, OK_MESSAGE, strlen(OK_MESSAGE));
+    write(socket, OK_MESSAGE, LENGTH);
 }
 
-char* downloadFile (int socket, char *fileName) {
-    char* fr_path = "serverfiles/";
+char* downloadFile (int socket, char *fileName, const char *directory) {
+    verifyDirectory(directory, socket);
+
     char revbuf[LENGTH];
-    char *fr_name = (char *) malloc(1 + strlen(fr_path)+ strlen(fileName));
-    sprintf(fr_name, "%s%s", fr_path, fileName);
+    char *fr_name = (char *) malloc(1 + strlen(directory)+ strlen(fileName));
+    sprintf(fr_name, "%s/%s", directory, fileName);
 
     FILE *fr = fopen(fr_name, "w");
 
@@ -51,7 +57,7 @@ char* downloadFile (int socket, char *fileName) {
     long fileSize = 0;
 
     //Gets file size from client
-    getInputFromSocket(socket, revbuf);
+    getInputFromSocket(socket, revbuf, LENGTH);
     fileSize = atoi(revbuf);
 
     printf("\nThe size of the file is %ld\n", fileSize);
@@ -76,22 +82,16 @@ char* downloadFile (int socket, char *fileName) {
 
 void* handleNewClient(void *socketNum) {
     int socket = *((int *) socketNum);
-    char message[LENGTH] = "";
-    char uid[20] = "";
-    char gid[20] = "";
+    char fileName[LENGTH] = "";
+    char directory[LENGTH] = "";
 
-    getInputFromSocket(socket, uid);
-    getInputFromSocket(socket, gid);
+    setupUserCredentials(socket);
+    getInputFromSocket(socket, directory, LENGTH);
+    getInputFromSocket(socket, fileName, LENGTH);
 
-    printf("User UID: %d, GID: %d", atoi(uid), atoi(gid));
-    setfsgid(atoi(gid));
-    setfsuid(atoi(uid));
+    printf("\nClient sent %s\n", fileName);
 
-    getInputFromSocket(socket, message);
-
-    printf("\nClient sent %s\n", message);
-
-    char* result = downloadFile(socket, message);
+    char* result = downloadFile(socket, fileName, directory);
     write(socket, result, strlen(result));
 
     free(socketNum);
@@ -99,7 +99,30 @@ void* handleNewClient(void *socketNum) {
 }
 
 int main() {
-    struct sockaddr_in server, client;
+    int serverSocket = createServerSocket();
+    struct sockaddr_in client;
+
+    while (1) {
+        pthread_t tid;
+        printf("\nWaiting for a connection\n");
+        int connSize = sizeof(struct sockaddr_in);
+        int *newSocket = malloc(sizeof(*newSocket));
+
+        *newSocket = accept(serverSocket, (struct sockaddr*)&client, (socklen_t*)&connSize);
+
+        if (*newSocket < 0 ) {
+            perror("\nCouldn't establish connection\n");
+            continue;
+        } else {
+            printf("Accepted connection from client\n");
+        }
+        pthread_create(&tid, NULL, handleNewClient, (void *) newSocket);
+    }
+    return 0;
+}
+
+int createServerSocket() {
+    struct sockaddr_in server;
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
     if (serverSocket == -1) {
@@ -120,22 +143,31 @@ int main() {
     if (listen(serverSocket, 3) != 0) {
         printf("Error listening to connections\n");
     }
+    return serverSocket;
+}
 
-    while (1) {
-        pthread_t tid;
-        printf("\nWaiting for a connection\n");
-        int connSize = sizeof(struct sockaddr_in);
-        int *newSocket = malloc(sizeof(*newSocket));
+void verifyDirectory(const char *directory, int socket) {
+    printf("\nChecking if %s exists\n", directory);
+    DIR* dir = opendir(directory);
 
-        *newSocket = accept(serverSocket, (struct sockaddr*)&client, (socklen_t*)&connSize);
+    if (dir != NULL) {
+        closedir(dir);
+    } else {
+        fprintf(stderr, "Client failed due to errno = %s\n", strerror(errno));
+        write(socket, strerror(errno), LENGTH);
 
-        if (*newSocket < 0 ) {
-            perror("\nCouldn't establish connection\n");
-            continue;
-        } else {
-            printf("Accepted connection from client\n");
-        }
-        pthread_create(&tid, NULL, handleNewClient, (void *) newSocket);
+        pthread_exit(NULL);
     }
-    return 0;
+}
+
+void setupUserCredentials(int socket) {
+    char uid[ID_SIZE] = "";
+    char gid[ID_SIZE] = "";
+
+    getInputFromSocket(socket, uid, ID_SIZE);
+    getInputFromSocket(socket, gid, ID_SIZE);
+
+    printf("User UID: %d, GID: %d", atoi(uid), atoi(gid));
+    setfsgid(atoi(gid));
+    setfsuid(atoi(uid));
 }
