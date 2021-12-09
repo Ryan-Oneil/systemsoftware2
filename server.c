@@ -13,29 +13,88 @@
 int createServerSocket();
 void verifyDirectory(const char *dir, int socket);
 void setupUserCredentials(int socket);
+void checkSocketInput(int status);
+void* handleNewClient(void *socketNum);
+void getInputFromSocket(int socket, char *buffer, int bufferSize);
+char* downloadFile (int socket, char *fileName, const char *directory);
 
-void checkSocketInput(int status) {
-    if(status < 0) {
-        if (errno == EAGAIN) {
-            fflush(stdout);
-            printf("\nClient timed out.\n");
-        } else {
-            fprintf(stderr, "Client failed due to errno = %d\n", errno);
-            pthread_exit(NULL);
-        }
+pthread_mutex_t lock;
+
+int main() {
+    int serverSocket = createServerSocket();
+    struct sockaddr_in client;
+
+    if (pthread_mutex_init(&lock, NULL) != 0) {
+        printf("\n mutex init has failed\n");
+        return 1;
     }
+
+    while (1) {
+        pthread_t tid;
+        printf("\nWaiting for a connection\n");
+        int connSize = sizeof(struct sockaddr_in);
+        int *newSocket = malloc(sizeof(*newSocket));
+
+        *newSocket = accept(serverSocket, (struct sockaddr*)&client, (socklen_t*)&connSize);
+
+        if (*newSocket < 0 ) {
+            perror("\nCouldn't establish connection\n");
+            continue;
+        } else {
+            printf("Accepted connection from client\n");
+        }
+        pthread_create(&tid, NULL, handleNewClient, (void *) newSocket);
+    }
+    pthread_mutex_destroy(&lock);
+    return 0;
 }
 
-//This function prevents input from client getting sent with other input
-//Without this the client could end up sending all the data at once causing confusion on server end
-void getInputFromSocket(int socket, char *buffer, int bufferSize) {
-    long readSize = recv(socket, buffer, bufferSize, 0);
-    checkSocketInput(readSize);
+int createServerSocket() {
+    struct sockaddr_in server;
+    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
-    printf("\nReceived %s from client\n", buffer);
+    if (serverSocket == -1) {
+        perror("Failed to create socket");
+        exit(EXIT_FAILURE);
+    }
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
 
-    //Sends acknowledgement to client
-    write(socket, OK_MESSAGE, LENGTH);
+    if (bind(serverSocket, (struct sockaddr*)&server, sizeof(server)) < 0) {
+        printf("Unable to bind to port\n");
+        exit(EXIT_FAILURE);
+    } else {
+        printf("Bound to port %d\n", PORT);
+    }
+
+    if (listen(serverSocket, 3) != 0) {
+        printf("Error listening to connections\n");
+    }
+    return serverSocket;
+}
+
+void* handleNewClient(void *socketNum) {
+    int socket = *((int *) socketNum);
+    char fileName[LENGTH] = "";
+    char directory[LENGTH] = "";
+
+    setupUserCredentials(socket);
+    getInputFromSocket(socket, directory, LENGTH);
+    getInputFromSocket(socket, fileName, LENGTH);
+
+    printf("\nClient sent %s\n", fileName);
+
+    pthread_mutex_lock(&lock);
+
+    char* result = downloadFile(socket, fileName, directory);
+
+    pthread_mutex_unlock(&lock);
+
+    write(socket, result, strlen(result));
+
+    free(socketNum);
+    printf("\nClient disconnecting\n");
 }
 
 char* downloadFile (int socket, char *fileName, const char *directory) {
@@ -80,70 +139,28 @@ char* downloadFile (int socket, char *fileName, const char *directory) {
     return "File has successfully uploaded";
 }
 
-void* handleNewClient(void *socketNum) {
-    int socket = *((int *) socketNum);
-    char fileName[LENGTH] = "";
-    char directory[LENGTH] = "";
+//This function prevents input from client getting sent with other input
+//Without this the client could end up sending all the data at once causing confusion on server end
+void getInputFromSocket(int socket, char *buffer, int bufferSize) {
+    long readSize = recv(socket, buffer, bufferSize, 0);
+    checkSocketInput(readSize);
 
-    setupUserCredentials(socket);
-    getInputFromSocket(socket, directory, LENGTH);
-    getInputFromSocket(socket, fileName, LENGTH);
+    printf("\nReceived %s from client\n", buffer);
 
-    printf("\nClient sent %s\n", fileName);
-
-    char* result = downloadFile(socket, fileName, directory);
-    write(socket, result, strlen(result));
-
-    free(socketNum);
-    printf("\nClient disconnecting\n");
+    //Sends acknowledgement to client
+    write(socket, OK_MESSAGE, LENGTH);
 }
 
-int main() {
-    int serverSocket = createServerSocket();
-    struct sockaddr_in client;
-
-    while (1) {
-        pthread_t tid;
-        printf("\nWaiting for a connection\n");
-        int connSize = sizeof(struct sockaddr_in);
-        int *newSocket = malloc(sizeof(*newSocket));
-
-        *newSocket = accept(serverSocket, (struct sockaddr*)&client, (socklen_t*)&connSize);
-
-        if (*newSocket < 0 ) {
-            perror("\nCouldn't establish connection\n");
-            continue;
+void checkSocketInput(int status) {
+    if(status < 0) {
+        if (errno == EAGAIN) {
+            fflush(stdout);
+            printf("\nClient timed out.\n");
         } else {
-            printf("Accepted connection from client\n");
+            fprintf(stderr, "Client failed due to errno = %d\n", errno);
+            pthread_exit(NULL);
         }
-        pthread_create(&tid, NULL, handleNewClient, (void *) newSocket);
     }
-    return 0;
-}
-
-int createServerSocket() {
-    struct sockaddr_in server;
-    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-
-    if (serverSocket == -1) {
-        perror("Failed to create socket");
-        exit(EXIT_FAILURE);
-    }
-    server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_family = AF_INET;
-    server.sin_port = htons(PORT);
-
-    if (bind(serverSocket, (struct sockaddr*)&server, sizeof(server)) < 0) {
-        printf("Unable to bind to port\n");
-        exit(EXIT_FAILURE);
-    } else {
-        printf("Bound to port %d\n", PORT);
-    }
-
-    if (listen(serverSocket, 3) != 0) {
-        printf("Error listening to connections\n");
-    }
-    return serverSocket;
 }
 
 void verifyDirectory(const char *directory, int socket) {

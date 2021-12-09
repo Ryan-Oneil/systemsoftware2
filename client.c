@@ -13,65 +13,9 @@
 void readInputFromSocket(int networkSocket);
 void sendCredentialsToServer(int networkSocket);
 int createClientSocket();
-
-long getFileSize(const char *fileName) {
-    struct stat st;
-    stat(fileName, &st);
-
-    return st.st_size;
-}
-
-//This function waits for the server to acknowledge the data we sent before sending more
-void sendInputToServer(int socket, void *message, int messageSize) {
-    printf("\nSending %s to server\n", (char *) message);
-    char serverMessage[LENGTH];
-
-    send(socket, message, messageSize, 0);
-
-    if (recv(socket, serverMessage, LENGTH, 0) < 0) {
-        printf("\nIO error: %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
-    printf("\nServer: %s\n", serverMessage);
-
-    if (strcmp(serverMessage, OK_MESSAGE) != 0) {
-        exit(EXIT_FAILURE);
-    }
-}
-
-void uploadFile(int socket, char *file) {
-    char sdbuf[LENGTH];
-    char *fileName = basename(file);
-
-    sendInputToServer(socket, fileName, LENGTH);
-
-    printf("[Client] Sending %s to the server... ", fileName);
-    FILE *fs = fopen(fileName, "r");
-
-    if (fs == NULL) {
-        printf("\nERROR: File %s not found. \n", fileName);
-
-        exit(EXIT_FAILURE);
-    }
-    bzero(sdbuf, LENGTH);
-    char fileSize[LENGTH];
-    sprintf(fileSize, "%ld", getFileSize(fileName));
-    printf("\nSending filesize of %s\n", fileSize);
-
-    //Sends server the fileSize to determine the end of file
-    sendInputToServer(socket, fileSize, LENGTH);
-
-    int fs_block_sz;
-
-    while((fs_block_sz = fread(sdbuf, sizeof(char), LENGTH, fs)) > 0) {
-        if (send(socket, sdbuf, fs_block_sz, 0) < 0) {
-            fprintf(stderr, "ERROR: Failed to send file %s. (errno = %d)\n", fileName, errno);
-            exit(EXIT_FAILURE);
-        }
-        bzero(sdbuf, LENGTH);
-    }
-    fclose(fs);
-}
+long getFileSize(const char *fileName);
+void sendInputToServer(int socket, void *message, int messageSize);
+void uploadFile(int socket, char *file);
 
 int main() {
     int networkSocket = createClientSocket();
@@ -138,4 +82,63 @@ void readInputFromSocket(int networkSocket) {
         exit(EXIT_FAILURE);
     }
     printf("\nStatus: %s\n", serverMessage);
+}
+
+long getFileSize(const char *fileName) {
+    struct stat st;
+    stat(fileName, &st);
+
+    return st.st_size;
+}
+
+//This function waits for the server to acknowledge the data we sent before sending more
+void sendInputToServer(int socket, void *message, int messageSize) {
+    printf("\nSending %s to server\n", (char *) message);
+    char serverMessage[LENGTH];
+
+    send(socket, message, messageSize, 0);
+
+    if (recv(socket, serverMessage, LENGTH, 0) < 0) {
+        printf("\nIO error: %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+    printf("\nServer: %s\n", serverMessage);
+
+    if (strcmp(serverMessage, OK_MESSAGE) != 0) {
+        exit(EXIT_FAILURE);
+    }
+}
+
+void uploadFile(int socket, char *file) {
+    char sdbuf[LENGTH];
+    char *fileName = basename(file);
+
+    sendInputToServer(socket, fileName, LENGTH);
+
+    printf("[Client] Sending %s to the server... ", fileName);
+    FILE *fs = fopen(fileName, "r");
+
+    if (fs == NULL) {
+        printf("\nERROR: File %s not found. \n", fileName);
+
+        exit(EXIT_FAILURE);
+    }
+    bzero(sdbuf, LENGTH);
+    char fileSize[LENGTH];
+    sprintf(fileSize, "%ld", getFileSize(fileName));
+    printf("\nSending filesize of %s\n", fileSize);
+
+    //Sends server the fileSize to determine the end of file
+    sendInputToServer(socket, fileSize, LENGTH);
+
+    int fs_block_sz;
+
+    while((fs_block_sz = fread(sdbuf, sizeof(char), LENGTH, fs)) > 0) {
+        if (send(socket, sdbuf, fs_block_sz, 0) < 0) {
+            fprintf(stderr, "ERROR: Failed to send file %s. (errno = %d)\n", fileName, errno);
+            exit(EXIT_FAILURE);
+        }
+        bzero(sdbuf, LENGTH);
+    }
+    fclose(fs);
 }
