@@ -1,21 +1,13 @@
-#include <arpa/inet.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <unistd.h>
-#include "constants.h"
 #include <errno.h>
-#include <pthread.h>
 #include <sys/fsuid.h>
 #include <dirent.h>
+#include "socket.c"
 
-int createServerSocket();
 void verifyDirectory(const char *dir, int socket);
 void setupUserCredentials(int socket);
-void checkSocketInput(int status);
 void* handleNewClient(void *socketNum);
-void getInputFromSocket(int socket, char *buffer, int bufferSize);
 char* downloadFile (int socket, char *fileName, const char *directory);
 
 pthread_mutex_t lock;
@@ -49,31 +41,6 @@ int main() {
     return 0;
 }
 
-int createServerSocket() {
-    struct sockaddr_in server;
-    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-
-    if (serverSocket == -1) {
-        perror("Failed to create socket");
-        exit(EXIT_FAILURE);
-    }
-    server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_family = AF_INET;
-    server.sin_port = htons(PORT);
-
-    if (bind(serverSocket, (struct sockaddr*)&server, sizeof(server)) < 0) {
-        printf("Unable to bind to port\n");
-        exit(EXIT_FAILURE);
-    } else {
-        printf("Bound to port %d\n", PORT);
-    }
-
-    if (listen(serverSocket, 3) != 0) {
-        printf("Error listening to connections\n");
-    }
-    return serverSocket;
-}
-
 void* handleNewClient(void *socketNum) {
     int socket = *((int *) socketNum);
     char fileName[LENGTH] = "";
@@ -97,7 +64,7 @@ void* handleNewClient(void *socketNum) {
     printf("\nClient disconnecting\n");
 }
 
-char* downloadFile (int socket, char *fileName, const char *directory) {
+char* downloadFile(int socket, char *fileName, const char *directory) {
     verifyDirectory(directory, socket);
 
     char revbuf[LENGTH];
@@ -136,31 +103,9 @@ char* downloadFile (int socket, char *fileName, const char *directory) {
     fclose(fr);
     free(fr_name);
 
+    sleep(10);
+
     return "File has successfully uploaded";
-}
-
-//This function prevents input from client getting sent with other input
-//Without this the client could end up sending all the data at once causing confusion on server end
-void getInputFromSocket(int socket, char *buffer, int bufferSize) {
-    long readSize = recv(socket, buffer, bufferSize, 0);
-    checkSocketInput(readSize);
-
-    printf("\nReceived %s from client\n", buffer);
-
-    //Sends acknowledgement to client
-    write(socket, OK_MESSAGE, LENGTH);
-}
-
-void checkSocketInput(int status) {
-    if(status < 0) {
-        if (errno == EAGAIN) {
-            fflush(stdout);
-            printf("\nClient timed out.\n");
-        } else {
-            fprintf(stderr, "Client failed due to errno = %d\n", errno);
-            pthread_exit(NULL);
-        }
-    }
 }
 
 void verifyDirectory(const char *directory, int socket) {
